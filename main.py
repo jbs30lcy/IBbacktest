@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from backtest import calculate_buy_unit, run_backtest
-from methods import IB1
+from backtest import calculate_buy_unit, run_backtests
+from methods import IB1, IB2_2, IB3
 from models import State
-from report import export_graph, print_state
+from report import print_state
 
 
 def main(
@@ -32,16 +32,23 @@ def main(
         buy_unit=calculate_buy_unit(csv_path, start_date),
         mode="normal",
     )
-    final_state, result = run_backtest(
+    ticker = csv_path.stem.removesuffix("_daily").lower()
+    results = run_backtests(
         csv_path=csv_path,
         initial_state=initial_state,
-        method=IB1,
+        methods=[IB1, IB2_2, IB3],
+        graph_path=(
+            Path(__file__).parent
+            / "output"
+            / f"{ticker}_ib1_ib2_2_ib3_comparison.png"
+        ),
         start_date=start_date,
         end_date=end_date,
     )
 
-    print_state(final_state, result)
-    export_graph(result, Path(__file__).parent / "output" / "tqqq_ib1_ref10.png")
+    for name, (final_state, result) in results.items():
+        print(f"\n[{name}]")
+        print_state(final_state, result)
 
 
 if __name__ == "__main__":
