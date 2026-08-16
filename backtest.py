@@ -32,6 +32,8 @@ def run_backtest(
         constants = get_default_constants(method)
 
     data = pd.read_csv(csv_path, parse_dates=["Date"])
+    data["_Previous Close"] = data["Close"].shift(1)
+    data["_Previous 5 Close Average"] = data["Close"].shift(1).rolling(5).mean()
 
     first_date = data["Date"].min()
     last_date = data["Date"].max()

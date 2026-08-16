@@ -36,7 +36,7 @@ class State:
 @dataclass
 class Constants:
     star_reference: float
-    sell_threshold: float
+    sell_reference: float
     division_count: int
     interval: int
     compound: CompoundMode
@@ -49,11 +49,16 @@ class Prices:
     low: float
     close: float
     adj_close: float
+    previous_close: float | None = None
+    previous_five_close_average: float | None = None
 
 
 PrepareMethod: TypeAlias = Callable[[State, Constants], None]
 OrderMethod: TypeAlias = Callable[..., list[dict[str, Any]]]
-SettleMethod: TypeAlias = Callable[[State, list[dict[str, Any]], Constants], None]
+SettleMethod: TypeAlias = Callable[
+    [State, list[dict[str, Any]], Constants, Prices],
+    None,
+]
 
 
 @dataclass(frozen=True)

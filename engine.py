@@ -111,15 +111,28 @@ def trade(
     if split_ratio > 0:
         new_state.buy_unit = int(new_state.buy_unit / split_ratio)
 
+    previous_close = csv_row.get("_Previous Close")
+    if pd.isna(previous_close):
+        previous_close = data.iloc[row - 1]["Close"] if row > 0 else None
+
+    previous_five_close_average = csv_row.get("_Previous 5 Close Average")
+    if pd.isna(previous_five_close_average):
+        previous_closes = data.iloc[max(0, row - 5):row]["Close"]
+        previous_five_close_average = (
+            previous_closes.mean() if len(previous_closes) == 5 else None
+        )
+
     prices = Prices(
         open=csv_row["Open"],
         high=csv_row["High"],
         low=csv_row["Low"],
         close=csv_row["Close"],
         adj_close=csv_row["Adj Close"],
+        previous_close=previous_close,
+        previous_five_close_average=previous_five_close_average,
     )
     method.prepare(new_state, constants)
     order_list = method.create_orders(new_state, constants, prices)
     executed_list = execute(order_list, new_state, prices)
-    method.settle(new_state, executed_list, constants)
+    method.settle(new_state, executed_list, constants, prices)
     return new_state
