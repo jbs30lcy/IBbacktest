@@ -107,6 +107,7 @@ def prepare_IB4(state: State, constants: Constants) -> None:
         state.buy_amount = state.cash / remaining_turns
 
 
+
 def create_orders_IB1(
     state: State,
     constants: Constants,
@@ -300,7 +301,8 @@ def create_orders_IB4quartersell(
     prices: Prices,
 ) -> List[Order]:
     if state.mode == "alternate":
-        return [MOCsell(quantity=state.quantity)]
+        quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
+        return [MOCsell(quantity = quarter_quantity)]
 
     amount = state.buy_amount
     if state.t == 0:
