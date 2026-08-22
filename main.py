@@ -1,7 +1,7 @@
 from copy import copy
 
 from backtest import calculate_buy_unit, run_backtests
-from methods import IB4, IB4_SOXL_DEFAULT, create_orders_IB4quartersell
+from methods import IB4, create_orders_IB4quartersell, get_default_constants
 from models import State, Strategy
 from report import print_state
 
@@ -26,22 +26,22 @@ def main():
     soxl_initial_state = copy(tqqq_initial_state)
     soxl_initial_state.buy_unit = calculate_buy_unit(soxl_path, start_date)
 
-    ib4_40_defaults = copy(IB4.defaults)
-    ib4_40_defaults.division_count = 40
-    soxl_40_constants = copy(IB4_SOXL_DEFAULT)
+    tqqq_40_constants = get_default_constants("TQQQ", IB4)
+    tqqq_40_constants.division_count = 40
+    soxl_40_constants = get_default_constants("SOXL", IB4)
     soxl_40_constants.division_count = 40
 
     IB4_40 = Strategy(
+        key="IB4_40",
         name="IB4_40",
-        defaults=ib4_40_defaults,
         prepare=IB4.prepare,
         create_orders=IB4.create_orders,
         settle=IB4.settle,
     )
 
     IB4_40_quartersell = Strategy(
+        key="IB4_40_QUARTERSELL",
         name="IB4_40_quartersell",
-        defaults=ib4_40_defaults,
         prepare=IB4.prepare,
         create_orders=create_orders_IB4quartersell,
         settle=IB4.settle,
@@ -52,6 +52,8 @@ def main():
         initial_state=tqqq_initial_state,
         methods=[IB4_40, IB4_40_quartersell],
         graph_path="output/tqqq_2022.png",
+        product="TQQQ",
+        constants=tqqq_40_constants,
         start_date=start_date,
         end_date=end_date,
     )
@@ -60,6 +62,7 @@ def main():
         initial_state=soxl_initial_state,
         methods=[IB4_40, IB4_40_quartersell],
         graph_path="output/soxl_2022.png",
+        product="SOXL",
         constants=soxl_40_constants,
         start_date=start_date,
         end_date=end_date,

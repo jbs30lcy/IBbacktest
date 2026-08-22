@@ -1,11 +1,22 @@
-import warnings
 from dataclasses import replace
 from typing import Any, Dict, List
 
-from models import CompoundMode, Constants, Prices, State, Strategy, TradeMethod
+from models import CompoundMode, Constants, Prices, State, Strategy, TEffect, TradeMethod
 
 
 Order = Dict[str, Any]
+
+e_half = TEffect(increment=0.5)
+e_1 = TEffect(increment=1)
+e_x75 = TEffect(multiplier=0.75)
+e_x25 = TEffect(multiplier=0.25)
+e_zero = TEffect(multiplier=0)
+
+c_no = CompoundMode(0, True)
+c_half_realtime = CompoundMode(0.5, True)
+c_half_round = CompoundMode(0.5, False)
+c_full_realtime = CompoundMode(1, True)
+c_full_round = CompoundMode(1, False)
 
 
 def create_order(
@@ -14,6 +25,7 @@ def create_order(
     amount: float | None = None,
     quantity: int | None = None,
     price: float | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
     if amount is None and quantity is None:
         raise ValueError("amount 또는 quantity 중 하나를 정해야 합니다.")
@@ -30,6 +42,8 @@ def create_order(
         if price <= 0:
             raise ValueError("price는 0보다 커야 합니다.")
         order["price"] = price
+    if t_effect is not None:
+        order["t_effect"] = t_effect
     return order
 
 
@@ -37,46 +51,52 @@ def LOCbuy(
     price: float,
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("LOC", "buy", amount, quantity, price)
+    return create_order("LOC", "buy", amount, quantity, price, t_effect)
 
 
 def LOCsell(
     price: float,
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("LOC", "sell", amount, quantity, price)
+    return create_order("LOC", "sell", amount, quantity, price, t_effect)
 
 
 def LObuy(
     price: float,
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("LO", "buy", amount, quantity, price)
+    return create_order("LO", "buy", amount, quantity, price, t_effect)
 
 
 def LOsell(
     price: float,
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("LO", "sell", amount, quantity, price)
+    return create_order("LO", "sell", amount, quantity, price, t_effect)
 
 
 def MOObuy(
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("MOO", "buy", amount, quantity)
+    return create_order("MOO", "buy", amount, quantity, t_effect=t_effect)
 
 
 def MOCsell(
     amount: float | None = None,
     quantity: int | None = None,
+    t_effect: TEffect | None = None,
 ) -> Order:
-    return create_order("MOC", "sell", amount, quantity)
+    return create_order("MOC", "sell", amount, quantity, t_effect=t_effect)
 
 
 def divide_unit(a: float, b: float, unit: int) -> int:
@@ -85,6 +105,7 @@ def divide_unit(a: float, b: float, unit: int) -> int:
 
 def star_price(state: State, constants: Constants) -> float:
     star = (2 * constants.star_reference / constants.division_count) * (constants.division_count / 2 - state.t)
+    star = max(star, -constants.star_reference)
     return state.average_price * (1 + star * 0.01)
 
 
@@ -106,7 +127,12 @@ def prepare_IB4(state: State, constants: Constants) -> None:
             raise RuntimeError("이게 0이면 alternate여야 하는데 이상하당")
         state.buy_amount = state.cash / remaining_turns
 
-
+def create_orders_entire_sell(
+    state: State,
+    constants: Constants,
+    prices: Prices,
+) -> List[Order]:
+    return [MOCsell(quantity=state.quantity, t_effect=e_zero)]
 
 def create_orders_IB1(
     state: State,
@@ -115,37 +141,43 @@ def create_orders_IB1(
 ) -> List[Order]:
     amount = state.buy_amount
     if state.quantity > 0 and state.cash < amount:
-        return [MOCsell(quantity=state.quantity)]
+        return create_orders_entire_sell(state, constants, prices)
 
     if state.t == 0:
-        return [MOObuy(amount=amount)]
+        return [MOObuy(amount=amount, t_effect=e_1)]
 
     average_price = state.average_price
     return [
-        LObuy(average_price, amount=amount / 2),
-        LOCbuy(prices.open * 1.1, amount=amount / 2),
+        LObuy(average_price, amount=amount / 2, t_effect=e_half),
+        LOCbuy(prices.open * 1.1, amount=amount / 2, t_effect=e_half),
         LOsell(
             average_price * (1 + constants.sell_reference * 0.01),
             quantity=state.quantity,
+            t_effect=e_zero,
         ),
     ]
 
 
-def create_orders_alternate_IB2_2(state: State, constants: Constants) -> List[Order]:
+def create_orders_alternate_IB2_2(
+    state: State,
+    constants: Constants,
+    prices: Prices,
+) -> List[Order]:
     ad_count = constants.division_count // 4
     quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     rest_quantity = state.quantity - quarter_quantity
 
     if state.alter_t > ad_count - 1:
-        return [MOCsell(quantity=quarter_quantity)]
+        return [MOCsell(quantity=quarter_quantity, t_effect=e_x75)]
 
     loc_price = state.average_price * (1 - constants.star_reference * 0.01)
     return [
-        LOCbuy(loc_price - 0.01, amount=state.buy_amount),
-        LOCsell(loc_price, quantity=quarter_quantity),
+        LOCbuy(loc_price - 0.01, amount=state.buy_amount, t_effect=e_1),
+        LOCsell(loc_price, quantity=quarter_quantity, t_effect=e_x75),
         LOsell(
             state.average_price * (1 + constants.sell_reference * 0.01),
             quantity=rest_quantity,
+            t_effect=e_x25,
         ),
     ]
 
@@ -156,33 +188,38 @@ def create_orders_IB2_2(
     prices: Prices,
 ) -> List[Order]:
     if state.mode == "alternate":
-        return create_orders_alternate_IB2_2(state, constants)
+        return create_orders_alternate_IB2_2(state, constants, prices)
 
     amount = state.buy_amount
     if state.t == 0:
-        return [MOObuy(amount=amount)]
+        return [MOObuy(amount=amount, t_effect=e_1)]
 
     star = star_price(state, constants)
     if state.t < constants.division_count / 2:
         orders = [
-            LOCbuy(state.average_price, amount=amount / 2),
-            LOCbuy(star - 0.01, amount=amount / 2),
+            LOCbuy(state.average_price, amount=amount / 2, t_effect=e_half),
+            LOCbuy(star - 0.01, amount=amount / 2, t_effect=e_half),
         ]
     else:
-        orders = [LOCbuy(star - 0.01, amount=amount)]
+        orders = [LOCbuy(star - 0.01, amount=amount, t_effect=e_1)]
 
     loc_sell_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     orders.extend([
-        LOCsell(star, quantity=loc_sell_quantity),
+        LOCsell(star, quantity=loc_sell_quantity, t_effect=e_x75),
         LOsell(
             state.average_price * (1 + constants.sell_reference * 0.01),
             quantity=state.quantity - loc_sell_quantity,
+            t_effect=e_x25,
         ),
     ])
     return orders
 
 
-def create_orders_alternate_IB3(state: State, constants: Constants) -> List[Order]:
+def create_orders_alternate_IB3(
+    state: State,
+    constants: Constants,
+    prices: Prices,
+) -> List[Order]:
     max_extra_buys = constants.division_count // 4
     quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     rest_quantity = state.quantity - quarter_quantity
@@ -190,16 +227,16 @@ def create_orders_alternate_IB3(state: State, constants: Constants) -> List[Orde
 
     if state.alter_t >= max_extra_buys or state.cash < state.buy_amount:
         return [
-            MOCsell(quantity=quarter_quantity),
-            LOsell(target_price, quantity=rest_quantity),
+            MOCsell(quantity=quarter_quantity, t_effect=e_x75),
+            LOsell(target_price, quantity=rest_quantity, t_effect=e_x25),
         ]
 
     star = star_price(state, constants)
     buy_price = star - 0.01
     return [
-        LOCbuy(buy_price, amount=state.buy_amount),
-        LOCsell(star, quantity=quarter_quantity),
-        LOsell(target_price, quantity=rest_quantity),
+        LOCbuy(buy_price, amount=state.buy_amount, t_effect=e_1),
+        LOCsell(star, quantity=quarter_quantity, t_effect=e_x75),
+        LOsell(target_price, quantity=rest_quantity, t_effect=e_x25),
     ]
 
 
@@ -209,27 +246,28 @@ def create_orders_IB3(
     prices: Prices,
 ) -> List[Order]:
     if state.mode == "alternate":
-        return create_orders_alternate_IB3(state, constants)
+        return create_orders_alternate_IB3(state, constants, prices)
 
     amount = state.buy_amount
     if state.t == 0:
-        return [MOObuy(amount=amount)]
+        return [MOObuy(amount=amount, t_effect=e_1)]
 
     star = star_price(state, constants)
     if state.t < constants.division_count / 2:
         orders = [
-            LOCbuy(state.average_price, amount=amount / 2),
-            LOCbuy(star - 0.01, amount=amount / 2),
+            LOCbuy(state.average_price, amount=amount / 2, t_effect=e_half),
+            LOCbuy(star - 0.01, amount=amount / 2, t_effect=e_half),
         ]
     else:
-        orders = [LOCbuy(star - 0.01, amount=amount)]
+        orders = [LOCbuy(star - 0.01, amount=amount, t_effect=e_1)]
 
     quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     orders.extend([
-        LOCsell(star, quantity=quarter_quantity),
+        LOCsell(star, quantity=quarter_quantity, t_effect=e_x75),
         LOsell(
             state.average_price * (1 + constants.sell_reference * 0.01),
             quantity=state.quantity - quarter_quantity,
+            t_effect=e_x25,
         ),
     ])
     return orders
@@ -242,22 +280,27 @@ def create_orders_alternate_IB4(
 ) -> List[Order]:
     sell_divisor = constants.division_count // 2
     sell_quantity = divide_unit(state.quantity, sell_divisor, state.buy_unit)
+    e_sell = TEffect(multiplier=1 - 2 / constants.division_count)
+    e_buy = TEffect(
+        multiplier=0.75,
+        increment=constants.division_count * 0.25,
+    )
 
     if state.alter_t == 0:
-        return [MOCsell(quantity=sell_quantity)] if sell_quantity > 0 else []
+        return [MOCsell(quantity=sell_quantity, t_effect=e_sell)] if sell_quantity > 0 else []
 
     star = prices.previous_five_close_average
     if star is None:
         raise ValueError("IB4 alternate mode requires five previous closing prices.")
 
     if star > state.buy_amount:
-        return [MOCsell(quantity=sell_quantity)] if sell_quantity > 0 else []
+        return [MOCsell(quantity=sell_quantity, t_effect=e_sell)] if sell_quantity > 0 else []
 
     orders: List[Order] = []
     if state.buy_amount > 0:
-        orders.append(LOCbuy(star - 0.01, amount=state.buy_amount))
+        orders.append(LOCbuy(star - 0.01, amount=state.buy_amount, t_effect=e_buy))
     if sell_quantity > 0:
-        orders.append(LOCsell(star, quantity=sell_quantity))
+        orders.append(LOCsell(star, quantity=sell_quantity, t_effect=e_sell))
     return orders
 
 
@@ -272,25 +315,26 @@ def create_orders_IB4(
     amount = state.buy_amount
     if state.t == 0:
         reference_price = prices.previous_close or prices.open
-        return [LOCbuy(reference_price * 1.15, amount=amount)]
+        return [LOCbuy(reference_price * 1.15, amount=amount, t_effect=e_1)]
 
     star = star_price(state, constants)
     if state.t < constants.division_count / 2:
         orders = [
-            LOCbuy(state.average_price, amount=amount / 2),
-            LOCbuy(star - 0.01, amount=amount / 2),
+            LOCbuy(state.average_price, amount=amount / 2, t_effect=e_half),
+            LOCbuy(star - 0.01, amount=amount / 2, t_effect=e_half),
         ]
     else:
         orders = [
-            LOCbuy(star - 0.01, amount=amount),
+            LOCbuy(star - 0.01, amount=amount, t_effect=e_1),
         ]
 
     quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     orders.extend([
-        LOCsell(star, quantity=quarter_quantity),
+        LOCsell(star, quantity=quarter_quantity, t_effect=e_x75),
         LOsell(
             state.average_price * (1 + constants.sell_reference * 0.01),
             quantity = state.quantity - quarter_quantity,
+            t_effect=e_x25,
         ),
     ])
     return orders
@@ -302,30 +346,31 @@ def create_orders_IB4quartersell(
 ) -> List[Order]:
     if state.mode == "alternate":
         quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
-        return [MOCsell(quantity = quarter_quantity)]
+        return [MOCsell(quantity=quarter_quantity, t_effect=e_x75)]
 
     amount = state.buy_amount
     if state.t == 0:
         reference_price = prices.previous_close or prices.open
-        return [LOCbuy(reference_price * 1.15, amount=amount)]
+        return [LOCbuy(reference_price * 1.15, amount=amount, t_effect=e_1)]
 
     star = star_price(state, constants)
     if state.t < constants.division_count / 2:
         orders = [
-            LOCbuy(state.average_price, amount=amount / 2),
-            LOCbuy(star - 0.01, amount=amount / 2),
+            LOCbuy(state.average_price, amount=amount / 2, t_effect=e_half),
+            LOCbuy(star - 0.01, amount=amount / 2, t_effect=e_half),
         ]
     else:
         orders = [
-            LOCbuy(star - 0.01, amount=amount),
+            LOCbuy(star - 0.01, amount=amount, t_effect=e_1),
         ]
 
     quarter_quantity = divide_unit(state.quantity, 4, state.buy_unit)
     orders.extend([
-        LOCsell(star, quantity=quarter_quantity),
+        LOCsell(star, quantity=quarter_quantity, t_effect=e_x75),
         LOsell(
             state.average_price * (1 + constants.sell_reference * 0.01),
             quantity = state.quantity - quarter_quantity,
+            t_effect=e_x25,
         ),
     ])
     return orders
@@ -496,18 +541,6 @@ def settle_IB3(
         state.alter_t = constants.division_count // 4
 
 
-def quantity_based_add_t(state: State, order: Order) -> float:
-    executed_amount = order["actual_price"] * order["value"]
-    if 0 < executed_amount <= state.buy_amount / 2:
-        return 0.5
-    if state.buy_amount / 2 < executed_amount <= state.buy_amount:
-        return 1
-    raise ValueError(
-        "IB4 quantity-based buy amount must be greater than 0 "
-        "and less than or equal to buy_amount."
-    )
-
-
 def apply_sell_profits_IB4(
     state: State,
     executed: list[Order],
@@ -526,30 +559,27 @@ def apply_sell_profits_IB4(
             state.pending_profit += order["realized_profit"]
 
 
+def apply_t_effect(state: State, order: Order) -> None:
+    effect = order.get("t_effect")
+    if effect is None:
+        raise ValueError(
+            "settle_IB4를 사용하려면 주문에 t_effect를 지정해야 합니다."
+        )
+    state.t = state.t * effect.multiplier + effect.increment
+
+
 def settle_normal_IB4(
     state: State,
     executed: list[Order],
     constants: Constants,
 ) -> None:
     for order in executed:
-        if order["type"] != "sell":
-            continue
-        if order["method"] == "LOC":
-            state.t *= 0.75
-        elif order["method"] == "LO":
-            state.t *= 0.25
+        if order["type"] == "sell":
+            apply_t_effect(state, order)
 
     for order in executed:
         if order["type"] == "buy":
-            if order["by"] == "amount":
-                state.t += order["value"] / state.buy_amount
-            else:
-                warnings.warn(
-                    "Quantity-based IB4 buy orders are not recommended.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-                state.t += quantity_based_add_t(state, order)
+            apply_t_effect(state, order)
 
     apply_sell_profits_IB4(state, executed, constants)
 
@@ -569,10 +599,7 @@ def settle_alternate_IB4(
     prices: Prices,
 ) -> None:
     for order in executed:
-        if order["type"] == "sell":
-            state.t *= 1 - 2 / constants.division_count
-        elif order["type"] == "buy":
-            state.t += (constants.division_count - state.t) * 0.25
+        apply_t_effect(state, order)
 
     apply_sell_profits_IB4(state, executed, constants)
 
@@ -607,43 +634,61 @@ def settle_IB4(
 
     raise ValueError(f"Unsupported IB4 mode: {state.mode}")
 
-
 IB1 = Strategy(
-    name="IB1",
-    defaults=Constants(10, 10, 40, 1, CompoundMode.NO),
+    key="IB1",
+    name="IB V1",
     prepare=prepare_fixed_amount,
     create_orders=create_orders_IB1,
     settle=settle_IB1,
 )
 
 IB2_2 = Strategy(
-    name="IB2_2",
-    defaults=Constants(10, 10, 40, 1, CompoundMode.NO),
+    key="IB2_2",
+    name="IB V2.2",
     prepare=prepare_IB2_2,
     create_orders=create_orders_IB2_2,
     settle=settle_IB1_IB2_2,
 )
 
 IB3 = Strategy(
-    name="IB3",
-    defaults=Constants(15, 15, 20, 1, CompoundMode.HALF_REALTIME),
+    key="IB3",
+    name="IB V3",
     prepare=prepare_fixed_amount,
     create_orders=create_orders_IB3,
     settle=settle_IB3,
 )
 
-IB3_SOXL_DEFAULT = Constants(20, 20, 20, 1, CompoundMode.HALF_REALTIME)
-
 IB4 = Strategy(
-    name="IB4",
-    defaults=Constants(15, 15, 20, 1, CompoundMode.HALF_REALTIME),
+    key="IB4",
+    name="IB V4",
     prepare=prepare_IB4,
     create_orders=create_orders_IB4,
     settle=settle_IB4,
 )
 
-IB4_SOXL_DEFAULT = Constants(20, 20, 20, 1, CompoundMode.HALF_REALTIME)
+DEFAULTS_BY_PRODUCT: dict[str, dict[str, Constants]] = {
+    "TQQQ": {
+        "IB1": Constants(10, 10, 40, c_no),
+        "IB2_2": Constants(10, 10, 40, c_no),
+        "IB3": Constants(15, 15, 20, c_half_realtime),
+        "IB4": Constants(15, 15, 20, c_half_realtime),
+    },
+    "SOXL": {
+        "IB1": Constants(10, 10, 40, c_no),
+        "IB2_2": Constants(10, 10, 40, c_no),
+        "IB3": Constants(20, 20, 20, c_half_realtime),
+        "IB4": Constants(20, 20, 20, c_half_realtime),
+    },
+}
 
 
-def get_default_constants(method: TradeMethod) -> Constants:
-    return replace(method.defaults)
+def get_default_constants(product: str, method: TradeMethod) -> Constants:
+    product_key = product.upper()
+    try:
+        defaults = DEFAULTS_BY_PRODUCT[product_key][method.key]
+    except KeyError:
+        raise ValueError(
+            f"No defaults registered for product={product_key!r}, "
+            f"strategy={method.key!r}. Pass constants explicitly."
+        ) from None
+    return replace(defaults)

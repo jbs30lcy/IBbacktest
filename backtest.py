@@ -23,13 +23,14 @@ def run_backtest(
     csv_path: str | Path,
     initial_state: State,
     method: TradeMethod,
+    product: str,
     constants: Constants | None = None,
     start_date: str | int | None = None,
     end_date: str | int | None = None,
     output_csv_path: str | Path | None = None,
 ) -> tuple[State, pd.DataFrame]:
     if constants is None:
-        constants = get_default_constants(method)
+        constants = get_default_constants(product, method)
 
     data = pd.read_csv(csv_path, parse_dates=["Date"])
     data["_Previous Close"] = data["Close"].shift(1)
@@ -87,6 +88,7 @@ def run_backtests(
     initial_state: State,
     methods: list[TradeMethod],
     graph_path: str | Path,
+    product: str,
     constants: Constants | None = None,
     start_date: str | int | None = None,
     end_date: str | int | None = None,
@@ -107,6 +109,7 @@ def run_backtests(
             csv_path=csv_path,
             initial_state=initial_state,
             method=method,
+            product=product,
             constants=constants,
             start_date=start_date,
             end_date=end_date,
